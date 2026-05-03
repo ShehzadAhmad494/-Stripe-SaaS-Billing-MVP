@@ -241,39 +241,46 @@ The Nest CLI will place all generated files inside `src/` automatically.
 
 ### `payments`
 
-| Column                   | Type        | Constraints              |
-|--------------------------|-------------|--------------------------|
-| id                       | UUID        | Primary Key              |
-| userId                   | VARCHAR     | Not Null                 |
-| stripePaymentIntentId    | VARCHAR     | Unique, Not Null         |
-| idempotencyKey           | VARCHAR     | Unique, Not Null         |
-| amount                   | INTEGER     | Not Null (in cents)      |
-| currency                 | VARCHAR     | Not Null (e.g. `usd`)    |
-| status                   | VARCHAR     | `pending` / `succeeded` / `failed` |
-| createdAt                | TIMESTAMP   | Auto                     |
-| updatedAt                | TIMESTAMP   | Auto                     |
+| Column                | Type      | Constraints                                       |
+| --------------------- | --------- | ------------------------------------------------- |
+| id                    | UUID      | Primary Key                                       |
+| userId                | VARCHAR   | Not Null                                          |
+| stripePaymentIntentId | VARCHAR   | Unique, Not Null                                  |
+| idempotencyKey        | VARCHAR   | Unique, Not Null                                  |
+| amount                | INTEGER   | Not Null (in cents)                               |
+| currency              | VARCHAR   | Not Null (e.g. `usd`)                             |
+| status                | VARCHAR   | `pending` / `succeeded` / `failed`                |
+| failureReason         | VARCHAR   | Nullable (stores failure reason if payment fails) |
+| createdAt             | TIMESTAMP | Auto                                              |
+| updatedAt             | TIMESTAMP | Auto                                              |
+
+---
 
 ### `subscriptions`
 
-| Column                   | Type        | Constraints              |
-|--------------------------|-------------|--------------------------|
-| id                       | UUID        | Primary Key              |
-| userId                   | VARCHAR     | Not Null                 |
-| stripeSubscriptionId     | VARCHAR     | Nullable                 |
-| status                   | VARCHAR     | `active` / `inactive`    |
-| activatedAt              | TIMESTAMP   | Set on activation        |
-| paymentId                | UUID        | Foreign Key → payments   |
-| createdAt                | TIMESTAMP   | Auto                     |
-| updatedAt                | TIMESTAMP   | Auto                     |
+| Column               | Type      | Constraints                    |
+| -------------------- | --------- | ------------------------------ |
+| id                   | UUID      | Primary Key                    |
+| userId               | VARCHAR   | Not Null                       |
+| stripeSubscriptionId | VARCHAR   | Nullable                       |
+| planName             | VARCHAR   | Nullable (e.g. `Basic`, `Pro`) |
+| status               | VARCHAR   | `active` / `inactive`          |
+| activatedAt          | TIMESTAMP | Set on activation              |
+| paymentId            | UUID      | Foreign Key → payments         |
+| createdAt            | TIMESTAMP | Auto                           |
+| updatedAt            | TIMESTAMP | Auto                           |
+
+---
 
 ### `webhook_events`
 
-| Column                   | Type        | Constraints              |
-|--------------------------|-------------|--------------------------|
-| id                       | UUID        | Primary Key              |
-| stripeEventId            | VARCHAR     | Unique, Not Null         |
-| type                     | VARCHAR     | e.g. `payment_intent.succeeded` |
-| processedAt              | TIMESTAMP   | Set on insert            |
+| Column        | Type      | Constraints                                  |
+| ------------- | --------- | -------------------------------------------- |
+| id            | UUID      | Primary Key                                  |
+| stripeEventId | VARCHAR   | Unique, Not Null                             |
+| type          | VARCHAR   | e.g. `payment_intent.succeeded`              |
+| payload       | JSONB     | Nullable (stores raw Stripe webhook payload) |
+| processedAt   | TIMESTAMP | Set on insert                                |
 
 ---
 
