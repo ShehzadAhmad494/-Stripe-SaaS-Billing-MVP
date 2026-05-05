@@ -71,8 +71,8 @@ export default function CheckoutPage() {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              userId: "user_127",
-              amount: 2999,
+              userId: "Shehzad Ahmad",
+              amount: 30000,
               currency: "usd",
               idempotencyKey,
             }),
