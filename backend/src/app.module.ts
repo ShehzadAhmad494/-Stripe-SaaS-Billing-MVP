@@ -8,12 +8,16 @@ import { AppService } from './app.service';
 import { PaymentModule } from './payment/payment.module';
 import { WebhookModule } from './webhook/webhook.module';
 import { StripeService } from './stripe/stripe.service';
+import { StripeModule } from './stripe/stripe.module';
+
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+     // 🔥 DEBUG LINE
+  
 
     TypeOrmModule.forRoot({
       type: 'postgres',
@@ -32,7 +36,9 @@ import { StripeService } from './stripe/stripe.service';
 
     PaymentModule,
     WebhookModule,
+    StripeModule,
   ],
+  
 
   controllers: [AppController],
   providers: [AppService, StripeService],

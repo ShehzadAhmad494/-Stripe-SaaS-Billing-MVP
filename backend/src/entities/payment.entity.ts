@@ -34,6 +34,9 @@ export class Payment {
     default: 'pending',
   })
   status: 'pending' | 'succeeded' | 'failed';
+  
+  @Column({ nullable: true })
+clientSecret: string;
 
   @Column({
     nullable: true,
