@@ -1,10 +1,3 @@
-/*
-  🧠 PRODUCTION-GRADE WEBHOOK HANDLER
-  - Signature verification
-  - Idempotency (event deduplication)
-  - Race condition protection (transaction + row lock)
-*/
-
 import { Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -26,10 +19,11 @@ export class WebhookService {
 
     @InjectRepository(WebhookEvent)
     private readonly webhookRepo: Repository<WebhookEvent>,
+
     @InjectRepository(Subscription)
     private readonly subscriptionRepo: Repository<Subscription>,
 
-    private readonly dataSource: DataSource, // 👈 IMPORTANT
+    private readonly dataSource: DataSource,
   ) {}
 
   async handleStripeEvent(body: Buffer, signature: string) {
@@ -45,11 +39,19 @@ export class WebhookService {
         process.env.STRIPE_WEBHOOK_SECRET!,
       );
     } catch (err) {
-      console.log('❌ Invalid signature');
+      console.log({
+        level: 'error',
+        message: 'Invalid webhook signature',
+      });
       throw new Error('Invalid webhook signature');
     }
 
-    console.log('📩 Event received:', event.type, event.id);
+    console.log({
+      level: 'info',
+      eventId: event.id,
+      type: event.type,
+      step: 'received',
+    });
 
     // =========================
     // 2. IDEMPOTENCY CHECK
@@ -59,7 +61,13 @@ export class WebhookService {
     });
 
     if (exists) {
-      console.log('🟡 Duplicate event ignored:', event.id);
+      console.log({
+        level: 'warn',
+        eventId: event.id,
+        type: event.type,
+        decision: 'ignored',
+        reason: 'duplicate_event',
+      });
       return;
     }
 
@@ -70,88 +78,56 @@ export class WebhookService {
       stripeEventId: event.id,
       type: event.type,
       payload: event,
+      status: 'pending',
     });
 
-    console.log('🟢 Event saved:', event.id);
+    console.log({
+      level: 'info',
+      eventId: event.id,
+      step: 'saved_to_db',
+    });
 
     // =========================
-    // 4. HANDLE ONLY IMPORTANT EVENTS
+    // 4. ROUTING
     // =========================
-    if (event.type === 'payment_intent.succeeded') {
-      await this.handleSuccess(event);
-    }
+    try {
+      if (event.type === 'payment_intent.succeeded') {
+        await this.handleSuccess(event);
+      }
 
-    if (event.type === 'payment_intent.payment_failed') {
-      await this.handleFailure(event);
+      if (event.type === 'payment_intent.payment_failed') {
+        await this.handleFailure(event);
+      }
+
+      // ✅ mark processed
+      await this.webhookRepo.update(
+        { stripeEventId: event.id },
+        { status: 'processed' },
+      );
+
+      console.log({
+        level: 'info',
+        eventId: event.id,
+        step: 'completed',
+      });
+
+    } catch (error) {
+      console.log({
+        level: 'error',
+        eventId: event.id,
+        message: error.message,
+        step: 'processing_failed',
+      });
+
+      throw error; // Stripe retry
     }
   }
 
   // =========================
-  // SUCCESS HANDLER (SAFE)
+  // SUCCESS HANDLER (SELF-HEALING ADDED)
   // =========================
-private async handleSuccess(event: any) {
-  const paymentIntent = event.data.object;
-
-  await this.dataSource.transaction(async (manager) => {
-
-    // 🔒 LOCK PAYMENT
-    const payment = await manager.findOne(Payment, {
-      where: { stripePaymentIntentId: paymentIntent.id },
-      lock: { mode: 'pessimistic_write' },
-    });
-
-    if (!payment) {
-      console.log('⚠️ Payment not found');
-      return;
-    }
-
-    // ✅ Already processed?
-    if (payment.status === 'succeeded') {
-      console.log('🟡 Already succeeded');
-      return;
-    }
-
-    // ✅ Update payment
-    payment.status = 'succeeded';
-    await manager.save(payment);
-
-    console.log('✅ Payment updated');
-
-    // =========================
-    // 🔥 CREATE SUBSCRIPTION
-    // =========================
-
-    // check if already exists
-    const existingSub = await manager.findOne(Subscription, {
-      where: { payment: { id: payment.id } },
-    });
-
-    if (existingSub) {
-      console.log('🟡 Subscription already exists');
-      return;
-    }
-
-    const subscription = manager.create(Subscription, {
-      userId: payment.userId,
-      status: 'active',
-      activatedAt: new Date(),
-      payment: payment,
-      planName: 'Basic', // MVP hardcoded
-    });
-
-    await manager.save(subscription);
-
-    console.log('🔥 Subscription created');
-  });
-}
-
-  // =========================
-  // FAILURE HANDLER (SAFE)
-  // =========================
-  private async handleFailure(event: any) {
+  private async handleSuccess(event: any) {
     const paymentIntent = event.data.object;
-
-    console.log('❌ Processing FAILURE:', paymentIntent.id);
 
     await this.dataSource.transaction(async (manager) => {
       const payment = await manager.findOne(Payment, {
@@ -160,12 +136,99 @@ private async handleSuccess(event: any) {
       });
 
       if (!payment) {
-        console.log('⚠️ Payment not found');
+        console.log({
+          level: 'warn',
+          eventId: event.id,
+          decision: 'skipped',
+          reason: 'payment_not_found',
+        });
+        return;
+      }
+
+      // 🔥 ALWAYS CHECK SUBSCRIPTION FIRST (SELF-HEALING CORE)
+      const existingSub = await manager.findOne(Subscription, {
+        where: { payment: { id: payment.id } },
+      });
+
+      // =========================
+      // CASE 1: FULLY DONE
+      // =========================
+      if (payment.status === 'succeeded' && existingSub) {
+        console.log({
+          level: 'info',
+          eventId: event.id,
+          decision: 'skipped',
+          reason: 'already_processed',
+        });
+        return;
+      }
+
+      // =========================
+      // CASE 2: PAYMENT NOT UPDATED YET
+      // =========================
+      if (payment.status !== 'succeeded') {
+        payment.status = 'succeeded';
+        await manager.save(payment);
+
+        console.log({
+          level: 'info',
+          eventId: event.id,
+          action: 'payment_updated',
+        });
+      }
+
+      // =========================
+      // CASE 3: SUBSCRIPTION MISSING (SELF-HEAL)
+      // =========================
+      if (!existingSub) {
+        const subscription = manager.create(Subscription, {
+          userId: payment.userId,
+          status: 'active',
+          activatedAt: new Date(),
+          payment: payment,
+          planName: 'Basic',
+        });
+
+        await manager.save(subscription);
+
+        console.log({
+          level: 'info',
+          eventId: event.id,
+          action: 'subscription_created',
+        });
+      }
+    });
+  }
+
+  // =========================
+  // FAILURE HANDLER
+  // =========================
+  private async handleFailure(event: any) {
+    const paymentIntent = event.data.object;
+
+    await this.dataSource.transaction(async (manager) => {
+      const payment = await manager.findOne(Payment, {
+        where: { stripePaymentIntentId: paymentIntent.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!payment) {
+        console.log({
+          level: 'warn',
+          eventId: event.id,
+          decision: 'skipped',
+          reason: 'payment_not_found',
+        });
         return;
       }
 
       if (payment.status === 'failed') {
-        console.log('🟡 Already failed, skipping');
+        console.log({
+          level: 'warn',
+          eventId: event.id,
+          decision: 'skipped',
+          reason: 'already_failed',
+        });
         return;
       }
 
@@ -175,7 +238,11 @@ private async handleSuccess(event: any) {
 
       await manager.save(payment);
 
-      console.log('❌ Payment marked failed');
+      console.log({
+        level: 'info',
+        eventId: event.id,
+        action: 'payment_failed_updated',
+      });
     });
   }
 }

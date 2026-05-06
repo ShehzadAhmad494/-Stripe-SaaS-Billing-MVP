@@ -23,8 +23,11 @@ export class WebhookEvent {
   })
   payload: Record<string, any>;
 
+  @Column({ default: 'pending' })
+status: 'pending' | 'processed' | 'failed';
+
   @Column({
-    type: 'timestamp',
+    type: 'timestamptz',
     default: () => 'CURRENT_TIMESTAMP',
   })
   processedAt: Date;
